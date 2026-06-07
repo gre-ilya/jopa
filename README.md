@@ -127,6 +127,100 @@ target_link_libraries(my_app PRIVATE
 
 ---
 
+## Использование в проекте на qmake
+
+Если твой проект собирается через **qmake** (`.pro`-файл), CMake тебе вообще не нужен — есть готовый `gdbparse.pri`, который подключает либу одной строкой.
+
+### Шаг 1 — положи исходники gpsbabel рядом
+
+Скопируй (или добавь как git submodule) дерево исходников gpsbabel 1.9.0 куда-нибудь внутрь своего проекта, например:
+
+```
+my_app/
+├── my_app.pro
+├── main.cpp
+└── third_party/
+    └── gpsbabel/
+        ├── gdb.cc, defs.h, ...        ← исходники gpsbabel как есть
+        └── lib_gdbparse/
+            ├── gdbparse.h
+            ├── gdbparse.pri           ← вот этот файл нам и нужен
+            └── ...
+```
+
+Важно: `lib_gdbparse` должен остаться **внутри** дерева gpsbabel — `.pri` ссылается на исходники парсера через относительный путь `$$PWD/..`.
+
+### Шаг 2 — подключи `.pri` в своём `.pro`
+
+```qmake
+# my_app.pro
+QT += core
+CONFIG += c++17
+
+include(third_party/gpsbabel/lib_gdbparse/gdbparse.pri)
+
+SOURCES += main.cpp
+```
+
+Всё. `gdbparse.pri` сам добавит:
+- все нужные `.cc`-файлы парсера в `SOURCES`
+- путь до заголовков в `INCLUDEPATH`
+- `QT += core` (и `core5compat`, если у тебя Qt6)
+- линковку с zlib
+
+Пересобираешь проект (`qmake && make`, либо просто открываешь `.pro` в Qt Creator и жмёшь «Собрать») — `gdbparse.h` уже доступен для `#include`.
+
+### Шаг 3 — пользуйся
+
+```cpp
+#include "gdbparse.h"
+#include <QDebug>
+
+void loadTrack(const QString& path) {
+    auto data = gdbparse::parse_gdb(path.toStdString());
+    qDebug() << "waypoints:" << data.waypoints.size();
+}
+```
+
+### Про zlib на Windows
+
+На Linux/macOS всё работает из коробки (`-lz`, либа системная). На Windows zlib обычно нужно подключить руками — самый простой путь:
+
+```bat
+vcpkg install zlib
+qmake CONFIG+=... -spec ... "VCPKG_ROOT=C:/vcpkg"
+```
+
+Либо пропиши пути напрямую — открой `gdbparse.pri`, найди блок `win32 { ... }` и раскомментируй/поправь:
+
+```qmake
+win32 {
+    INCLUDEPATH += C:/zlib/include
+    LIBS        += -LC:/zlib/lib -lzlib
+}
+```
+
+### Альтернатива — линковаться с готовой статической либой
+
+Если не хочешь компилировать исходники gpsbabel внутри своего проекта (например, либа уже собрана через CMake — см. раздел «Сборка» выше), можно слинковаться с готовым `.a`/`.lib` напрямую, без `.pri`:
+
+```qmake
+# my_app.pro
+QT += core
+CONFIG += c++17
+
+INCLUDEPATH += path/to/lib_gdbparse
+
+unix:  LIBS += path/to/build_gdbparse/libgdbparse.a -lz
+win32: LIBS += path/to/build_gdbparse/gdbparse.lib  -lzlib
+
+SOURCES += main.cpp
+```
+
+Заголовок `gdbparse.h` от Qt-типов свободен — `path/to/lib_gdbparse` в `INCLUDEPATH` достаточно, остальные внутренности gpsbabel твоему коду не видны и не нужны.
+
+---
+
 ## Примеры посерьёзнее
 
 ### 1. Распечатать все точки
@@ -308,7 +402,8 @@ lib_gdbparse/
 ├── fatal_lib.cc      ← замена fatal.cc: throw вместо exit
 ├── gbversion.h       ← заглушка версии для сборки
 ├── demo.cc           ← пример CLI-утилиты
-├── CMakeLists.txt    ← сборка
+├── CMakeLists.txt    ← сборка через CMake
+├── gdbparse.pri      ← сборка через qmake (include в свой .pro)
 └── README.md         ← этот файл
 ```
 
